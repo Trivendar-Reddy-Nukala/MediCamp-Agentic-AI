@@ -6,9 +6,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 try:
-    from langchain_google_genai import ChatGoogleGenerativeAI
+    import google.generativeai as genai
 except ImportError:
-    print("Please install: pip install langchain langchain-google-genai python-dotenv")
+    print("Please install: pip install google-generativeai python-dotenv")
+    exit(1)
 
 MEDICAL_PROMPT = """You are a medical conversation analyzer. Extract ALL medical information from this conversation.
 
@@ -124,11 +125,8 @@ class MedicalConversationAnalyzer:
             raise ValueError("GOOGLE_API_KEY not found in .env file")
         
         try:
-            self.model = ChatGoogleGenerativeAI(
-                model="gemini-2.0-flash",
-                google_api_key=self.api_key,
-                temperature=0.3
-            )
+            genai.configure(api_key=self.api_key)
+            self.model = genai.GenerativeModel("gemini-2.5-flash-lite")
             print("✅ Medical Analyzer initialized")
         except Exception as e:
             print(f"❌ Error initializing Google AI: {e}")
@@ -153,8 +151,8 @@ class MedicalConversationAnalyzer:
 
             prompt = MEDICAL_PROMPT + "\n" + conversation_text
             
-            response = self.model.invoke(prompt)
-            response_text = response.content.strip()
+            response = self.model.generate_content(prompt)
+            response_text = response.text.strip()
             
             if "```json" in response_text:
                 start = response_text.find("```json") + 7
@@ -219,7 +217,9 @@ class MedicalConversationAnalyzer:
             "all_medications": [
                 f"{med['name']} - {med.get('dosage', 'dosage not specified')}"
                 for med in full_analysis.get("medications", [])
-            ]
+            ],
+            "medical_history": full_analysis.get("medical_history", []),
+            "allergies": full_analysis.get("allergies", [])
         }
 
 
@@ -230,11 +230,8 @@ class MedicineVerificationAgent:
             raise ValueError("GOOGLE_API_KEY not found in .env file")
         
         try:
-            self.model = ChatGoogleGenerativeAI(
-                model="gemini-2.0-flash",
-                google_api_key=self.api_key,
-                temperature=0.1
-            )
+            genai.configure(api_key=self.api_key)
+            self.model = genai.GenerativeModel("gemini-2.5-flash-lite")
             print("✅ Senior Doctor Verification Agent initialized")
         except Exception as e:
             print(f"❌ Error initializing Verification Agent: {e}")
@@ -271,8 +268,8 @@ class MedicineVerificationAgent:
                 prescribed_medicines=medicines_text
             )
             
-            response = self.model.invoke(prompt)
-            response_text = response.content.strip()
+            response = self.model.generate_content(prompt)
+            response_text = response.text.strip()
             
             if "```json" in response_text:
                 start = response_text.find("```json") + 7
@@ -287,6 +284,13 @@ class MedicineVerificationAgent:
             print(f"✅ Verification complete - Safety: {result.get('overall_safety')}")
             return result
             
+        except json.JSONDecodeError as e:
+            print(f"❌ JSON Parse Error: {e}")
+            print(f"Response was: {response_text[:200]}")
+            return {
+                "error": f"Failed to parse AI response: {str(e)}",
+                "can_prescribe": False
+            }
         except Exception as e:
             print(f"❌ Verification Error: {str(e)}")
             return {"error": str(e), "can_prescribe": False}
