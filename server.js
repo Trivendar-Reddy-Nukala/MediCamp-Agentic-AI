@@ -324,6 +324,196 @@ app.post('/api/history/:aadhaar/conversation', authenticateToken, async (req, re
   }
 });
 
+// Analytics Routes
+app.get('/api/analytics/dashboard', authenticateToken, async (req, res) => {
+  try {
+    // Total counts
+    const totalConsultations = await History.countDocuments();
+    const totalDoctors = await Doctor.countDocuments();
+    const totalPatients = await User.countDocuments({ role: 'patient' });
+    const totalAdmins = await Admin.countDocuments();
+
+    // Consultations by day (last 30 days)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const consultationsByDay = await History.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: thirtyDaysAgo },
+        },
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: '%Y-%m-%d', date: '$createdAt' },
+          },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { _id: 1 } },
+      {
+        $project: {
+          date: '$_id',
+          count: 1,
+          _id: 0,
+        },
+      },
+    ]);
+
+    // Disease frequency
+    const diseaseFrequency = await History.aggregate([
+      { $unwind: '$diseases' },
+      {
+        $group: {
+          _id: '$diseases',
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { count: -1 } },
+      { $limit: 8 },
+      {
+        $project: {
+          disease: '$_id',
+          count: 1,
+          _id: 0,
+        },
+      },
+    ]);
+
+    // Symptom frequency
+    const symptomFrequency = await History.aggregate([
+      { $unwind: '$symptoms' },
+      {
+        $group: {
+          _id: '$symptoms',
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { count: -1 } },
+      { $limit: 10 },
+      {
+        $project: {
+          symptom: '$_id',
+          count: 1,
+          _id: 0,
+        },
+      },
+    ]);
+
+    // Language preference
+    const languagePreference = await History.aggregate([
+      {
+        $group: {
+          _id: '$patientLanguage',
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { count: -1 } },
+      {
+        $project: {
+          language: '$_id',
+          count: 1,
+          _id: 0,
+        },
+      },
+    ]);
+
+    // Doctor performance
+    const doctorPerformance = await History.aggregate([
+      {
+        $group: {
+          _id: '$doctorId',
+          doctorName: { $first: '$doctorName' },
+          consultationCount: { $sum: 1 },
+          averageRating: { $avg: '$rating' },
+        },
+      },
+      { $sort: { consultationCount: -1 } },
+      { $limit: 10 },
+      {
+        $project: {
+          _id: 0,
+          doctorName: 1,
+          consultationCount: 1,
+          averageRating: 1,
+        },
+      },
+    ]);
+
+    // Prescription verification
+    const prescriptionVerification = await History.aggregate([
+      {
+        $group: {
+          _id: '$prescriptionStatus',
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const prescriptionStats = {
+      approved: 0,
+      caution: 0,
+      rejected: 0,
+    };
+
+    prescriptionVerification.forEach(item => {
+      if (item._id === 'approved') prescriptionStats.approved = item.count;
+      if (item._id === 'caution') prescriptionStats.caution = item.count;
+      if (item._id === 'rejected') prescriptionStats.rejected = item.count;
+    });
+
+    // Age distribution
+    const ageDistribution = await User.aggregate([
+      {
+        $bucket: {
+          groupBy: '$age',
+          boundaries: [0, 18, 35, 50, 65, 120],
+          default: 'Unknown',
+          output: {
+            count: { $sum: 1 },
+          },
+        },
+      },
+      {
+        $project: {
+          ageGroup: {
+            $switch: {
+              branches: [
+                { case: { $eq: ['$_id', 0] }, then: '0-18' },
+                { case: { $eq: ['$_id', 18] }, then: '18-35' },
+                { case: { $eq: ['$_id', 35] }, then: '35-50' },
+                { case: { $eq: ['$_id', 50] }, then: '50-65' },
+                { case: { $eq: ['$_id', 65] }, then: '65+' },
+              ],
+              default: 'Unknown',
+            },
+          },
+          count: 1,
+          _id: 0,
+        },
+      },
+    ]);
+
+    res.json({
+      totalConsultations,
+      totalDoctors,
+      totalPatients,
+      totalAdmins,
+      consultationsByDay,
+      diseaseFrequency,
+      symptomFrequency,
+      languagePreference,
+      doctorPerformance,
+      prescriptionVerification: prescriptionStats,
+      ageDistribution,
+    });
+  } catch (error) {
+    console.error('Analytics error:', error);
+    res.status(500).json({ error: 'Failed to fetch analytics data' });
+  }
+});
+
 // Start Server
 const PORT = process.env.BACKEND_PORT || process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
